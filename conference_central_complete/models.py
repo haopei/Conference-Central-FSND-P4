@@ -14,7 +14,7 @@ __author__ = 'wesc+api@google.com (Wesley Chun)'
 
 import httplib
 import endpoints
-from protorpc import messages
+from protorpc import messages, message_types
 from google.appengine.ext import ndb
 
 
@@ -63,6 +63,7 @@ class TeeShirtSize(messages.Enum):
     XXXL_M = 14
     XXXL_W = 15
 
+
 class StringMessage(messages.Message):
     """StringMessage-- outbound (single) string message"""
     data = messages.StringField(1, required=True)
@@ -76,7 +77,7 @@ class BooleanMessage(messages.Message):
 class Conference(ndb.Model):
     """Conference -- Conference object"""
     name = ndb.StringProperty(required=True)
-    description = ndb.StringProperty()
+    description = ndb.StringProperty(indexed=False)
     organizerUserId = ndb.StringProperty()
     topics = ndb.StringProperty(repeated=True)
     city = ndb.StringProperty()
@@ -129,8 +130,8 @@ class Session(ndb.Model):
     name = ndb.StringProperty(required=True)
     highlights = ndb.TextProperty()
     speakers = ndb.StringProperty(repeated=True)
-    startTime = ndb.StringProperty()  # in 24 hour notation so it can be ordered
-    duration = ndb.StringProperty()
+    startTime = ndb.TimeProperty()
+    duration = ndb.IntegerProperty()
     session_type = ndb.StringProperty(repeated=True)
     parent_wsck = ndb.StringProperty()
     # location = ndb.StringProperty()
@@ -178,3 +179,40 @@ class SessionQueryForm(messages.Message):
 class SessionQueryForms(messages.Message):
     """SessionQueryForms -- multiple SessionQueryForm inbound for message"""
     filters = messages.MessageField(SessionQueryForm, 1, repeated=True)
+
+
+class SessionWishlistItem(ndb.Model):
+    """This represents a wishlist item. Ancestor: Profile entity"""
+    parent_wsck = ndb.StringProperty()
+    session_websafe_key = ndb.StringProperty()
+
+
+class SessionWishlistItemForm(messages.Message):
+    session_websafe_key = messages.StringField(1)
+
+
+class SessionWishlistQueryForm(messages.Message):
+    user_websafe_key = messages.StringField(1)
+    wsck = messages.StringField(2)
+
+# class SessionWishlist(ndb.Model):
+#     """A user's wishlist for sessions"""
+#     wlist = ndb.StringProperty(repeated=True)
+
+
+# class SessionWishlistForm(messages.Message):
+#     session_websafe_key = messages.StringField(1)
+
+
+# class SessionWishlistForms(messages.Message):
+#     items = messages.MessageField(SessionWishlistForm, 1, repeated=True)
+
+
+# class SessionWishlistQueryForm(messages.Message):
+#     """Used by getSessionsInWishlist
+#         to query for all the sessions in a conference that the user is interested in
+#     """
+#     parent_wsck = messages.StringField(1)
+
+
+

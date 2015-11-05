@@ -19,17 +19,20 @@ from google.appengine.api import memcache, taskqueue
 from google.appengine.ext import ndb
 
 from models import ConflictException
+from models import BooleanMessage
+from models import StringMessage
+
 from models import Profile
 from models import ProfileMiniForm
 from models import ProfileForm
-from models import StringMessage
-from models import BooleanMessage
+from models import TeeShirtSize
+
 from models import Conference
 from models import ConferenceForm
 from models import ConferenceForms
 from models import ConferenceQueryForm
 from models import ConferenceQueryForms
-from models import TeeShirtSize
+
 from models import Session
 from models import SessionForm
 from models import SessionForms
@@ -37,6 +40,13 @@ from models import SessionQueryForm
 from models import SessionQueryForms
 from models import SessionByTypeQueryForm
 from models import SessionBySpeakerQueryForm
+
+from models import SessionWishlistItem
+from models import SessionWishlistItemForm
+from models import SessionWishlistQueryForm
+# from models import SessionWishlist
+# from models import SessionWishlistForm
+# from models import SessionWishlistQueryForm
 
 from settings import WEB_CLIENT_ID, ANDROID_CLIENT_ID, IOS_CLIENT_ID, ANDROID_AUDIENCE
 
@@ -67,24 +77,44 @@ OPERATORS = {
     'LTEQ': '<=',
     'NE':   '!='}
 
+MEMCACHE_ANNOUNCEMENTS_KEY = "RECENT_ANNOUNCEMENTS"
+ANNOUNCEMENT_TPL = ('Last chance to attend! The following conferences '
+                    'are nearly sold out: %s')
 
 @endpoints.api(name='conference', version='v1', audiences=[ANDROID_AUDIENCE], allowed_client_ids=[WEB_CLIENT_ID, API_EXPLORER_CLIENT_ID, ANDROID_CLIENT_ID, IOS_CLIENT_ID], scopes=[EMAIL_SCOPE])
 class ConferenceApi(remote.Service):
     """Conference API v0.1"""
 
     def _getCurrentUser(self):
+        """gets the current logged in user's username; to be replaced by _getCurrentUserProfile()"""
         user = endpoints.get_current_user()
         if not user:
             raise endpoints.UnauthorizedException('Authorization required')
         return user
 
-    def _getConfByWebSafeKey(self, wsck):
+    def _getCurrentUserProfile(self):
+        """gets the current logged in user's Profile entity"""
+        username = endpoints.get_current_user()
+        if not username:
+            raise endpoints.UnauthorizedException('User is not logged in.')
+
+        user_id = getUserId(username)
+        if not user_id:
+            raise endpoints.NotFoundException('user_id cannot be retrieved from username: %s' % username)
+
+        user_profile = ndb.Key(Profile, user_id).get()
+        if not user_profile:
+            raise endpoints.NotFoundException('Cannot find Profile from user_id: %s' % user_id)
+
+        return user_profile
+
+    def _getEntityByWebSafeKey(self, websafe_key):
         """Given a websafe key, return parent Conference entity entity"""
-        parent_conf = ndb.Key(urlsafe=wsck).get()
-        if not parent_conf:
+        parent_entity = ndb.Key(urlsafe=websafe_key).get()
+        if not parent_entity:
             raise endpoints.NotFoundException(
-                'No parent conference found by this wsck: %s' % request.parent_wsck)
-        return parent_conf
+                'No parent entity found by this websafe key: %s' % websafe_key)
+        return parent_entity
 
 # - - - Conferences - - - - - - - - - - - - - - - - -
 
@@ -288,7 +318,6 @@ class ConferenceApi(remote.Service):
         for f in filters:
             # filtr is the dict format of ConferenceQueryForms
             filtr = {field.name: getattr(f, field.name) for field in f.all_fields()}
-            print filtr
 
             try:
                 filtr["field"] = FIELDS[filtr["field"]]
@@ -398,10 +427,6 @@ class ConferenceApi(remote.Service):
         return self._doProfile(request)
 
 # - - - Announcements - - - - - - - - - - - - - - - -
-
-    MEMCACHE_ANNOUNCEMENTS_KEY = "RECENT_ANNOUNCEMENTS"
-    ANNOUNCEMENT_TPL = ('Last chance to attend! The following conferences '
-                        'are nearly sold out: %s')
 
     @staticmethod
     def _cacheAnnouncement():
@@ -521,13 +546,42 @@ class ConferenceApi(remote.Service):
         for field in sf.all_fields():
             # check session container to see if matching fields exist
             if hasattr(session, field.name):
-                # set session container's matching field's value to that of SessionForm()
-                val_to_set = getattr(session, field.name)
-                setattr(sf, field.name, val_to_set)  # setattr(x, 'foobar', 123) is equivalent to x.foobar = 123
+                # convert time fields to string; just copy others
+                if field.name.endswith('Time'):
+                    setattr(sf, field.name, getattr(session, field.name).strftime("%I"))
+                else:
+                    # set session container's matching field's value to that of SessionForm()
+                    val_to_set = getattr(session, field.name)
+                    setattr(sf, field.name, val_to_set)  # setattr(x, 'foobar', 123) is equivalent to x.foobar = 123
         sf.check_initialized()
         return sf
 
-    # createSession(SessionForm, websafeConferenceKey)
+    @staticmethod
+    def _checkFeaturedSpeaker(wsck):
+        """Check to see if a speaker is in more than one sessions in a conference"""
+
+        # get the session's parent conference
+        conference = ndb.Key(urlsafe=wsck).get()
+
+        # find sessions in this conference
+        sessions = Session.query(ancestor=conference.key).fetch()
+
+        # retrieve all speakers from all sessions in this Conference
+        all_sessions_speakers = list()
+        for sess in sessions:
+            all_sessions_speakers.extend(sess.speakers)
+
+        # add featured speaker to memecache
+        if all_sessions_speakers:
+            # get the most frequently occuring speaker's name from the list of all speakers
+            featured_speaker = max(set(all_sessions_speakers), key=all_sessions_speakers.count)
+            data = "Today's featured speaker is %s" % str(featured_speaker)
+
+            # update memcache entry for featured_speaker
+            memcache.delete('featured_speaker')
+            memcache.add("featured_speaker", data)
+        return
+
     def _createSessionObject(self, request):
 
         # get current user
@@ -535,7 +589,7 @@ class ConferenceApi(remote.Service):
         user = self._getCurrentUser()
 
         # get parent Conference entity using wsck from request
-        parent_conf = self._getConfByWebSafeKey(request.parent_wsck)
+        parent_conf = self._getEntityByWebSafeKey(request.parent_wsck)
 
         # Allocate id for new Session entity
         session_id = Session.allocate_ids(size=1, parent=parent_conf.key)[0]
@@ -544,11 +598,19 @@ class ConferenceApi(remote.Service):
         # add values to data from request object (SessionForm)
         data = {field.name: getattr(request, field.name) for field in request.all_fields()}
 
+        # convert startTime into datetime.time object
+        #   since Session Kind expects a ndb.TimeProperty
+        data['startTime'] = datetime.strptime(data['startTime'], '%H').time()
+
         # assign the key of the to-be-created Session entity to be the session_key,
         #   which has the parent_conf embedded as the parent.
         data['key'] = session_key
 
+        # create the session entity
         Session(**data).put()
+
+        # create a task to update the featured speaker, if required.
+        taskqueue.add(url="/tasks/check_featured_speaker", params={'conference': request.parent_wsck})
 
         return request
 
@@ -556,7 +618,7 @@ class ConferenceApi(remote.Service):
     @endpoints.method(SessionForm, SessionForm, path='createSession', http_method='POST', name='createSession')
     def createSession(self, request):
         """Create a Session entity given a parent wsck"""
-        # todo: open only to the organizer of the conference
+        # TODO: only the creator of the conference can create its child sessions
         return self._createSessionObject(request)
 
     # TASK 2: COMPLETE
@@ -565,7 +627,7 @@ class ConferenceApi(remote.Service):
         """Given a conference, return its sessions"""
 
         # get the parent conference entity using the request.wsck
-        parent_conf = self._getConfByWebSafeKey(request.parent_wsck)
+        parent_conf = self._getEntityByWebSafeKey(request.parent_wsck)
 
         # query sessions using the parent_conf as ancestor
         sessions = Session.query(ancestor=parent_conf.key).fetch()
@@ -577,7 +639,7 @@ class ConferenceApi(remote.Service):
     def getConferenceSessionsByType(self, request):
         """Given a conference, return all sessions of a specified type (eg lecture, keynote, workshop)"""
 
-        parent_conf = self._getConfByWebSafeKey(request.parent_wsck)
+        parent_conf = self._getEntityByWebSafeKey(request.parent_wsck)
         sessions = Session.query(ancestor=parent_conf.key).filter(Session.session_type == request.session_type)
 
         return SessionForms(items=[self._copySessionToForm(session) for session in sessions])
@@ -590,20 +652,147 @@ class ConferenceApi(remote.Service):
 
         return SessionForms(items=[self._copySessionToForm(session) for session in sessions])
 
-    @endpoints.method(SessionQueryForms, SessionForms, path='filterPlayground', http_method='GET', name='filterPlayground')
+# - - - Wishlist - - - - - - - - - - - - - - - - - - -
+
+    @endpoints.method(SessionWishlistItemForm, SessionWishlistItemForm, path='addSessionToWishlist', http_method='POST', name='addSessionToWishlist')
+    def addSessionToWishlist(self, request):
+        """Add session to user's wishlist, given a session"""
+
+        # get current user
+        user = self._getCurrentUserProfile()
+
+        # retrieve Session entity from request to be added to wishlist
+        session_websafe_key = request.session_websafe_key
+        session_to_add = self._getEntityByWebSafeKey(session_websafe_key)
+
+        # check if user already added this Session to wishlist
+        session_in_wishlist = SessionWishlistItem.query(ancestor=user.key).filter(SessionWishlistItem.session_websafe_key == session_websafe_key).get()
+        if session_in_wishlist:
+            raise ConflictException('Session already found in wishlist.')
+
+        # define SessionWishlistItem id allocation and key
+        #   with user.key as parent
+        session_wishlist_id = SessionWishlistItem.allocate_ids(size=1, parent=user.key)[0]
+        session_wishlist_key = ndb.Key(SessionWishlistItem, session_wishlist_id, parent=user.key)
+
+        # prepare data to be used for creating new wishlist item
+        data = dict()
+        data['key'] = session_wishlist_key  # overwrite automatically generated key with our custom parental key
+        data['session_websafe_key'] = session_websafe_key
+        data['parent_wsck'] = session_to_add.parent_wsck
+        SessionWishlistItem(**data).put()
+
+        return request
+
+    # COMPLETE
+    @endpoints.method(SessionWishlistQueryForm, SessionForms, path='getSessionsInWishlist', http_method='POST', name='getSessionsInWishlist')
+    def getSessionsInWishlist(self, request):
+        """Query for all the sessions in a conference that the user is interested in
+            Given any user and conference, find all SessionWishlistItem in that session
+        """
+
+        # get user and conference from request
+        user = self._getEntityByWebSafeKey(request.user_websafe_key)
+        conference = self._getEntityByWebSafeKey(request.wsck)
+
+        # query for SessionWishlistItem entities
+        #   given user as ancestor
+        #   and wsck as parent conference
+        wishlist = SessionWishlistItem.query(
+            ancestor=user.key).filter(
+            SessionWishlistItem.parent_wsck == conference.key.urlsafe()).fetch()
+
+        # get Session entities from wishlist
+        sessions = [ndb.Key(urlsafe=wishlist_item.session_websafe_key).get() for wishlist_item in wishlist]
+
+        return SessionForms(items=[self._copySessionToForm(session) for session in sessions])
+
+# - - - Get Featured Speaker - - - - - - - - - - - - - - -
+
+    @endpoints.method(message_types.VoidMessage, StringMessage, path='getFeaturedSpeaker', http_method='POST', name='getFeaturedSpeaker')
+    def getFeaturedSpeaker(self, request):
+        """Retrieve the featured speaker from memcache"""
+        featured_speaker = memcache.get('featured_speaker')
+        if not featured_speaker:
+            featured_speaker = "No featured speaker right now."
+
+        return StringMessage(data=featured_speaker)
+
+# - - - Playground - - - - - - - - - - - - - - - - - - -
+    @endpoints.method(message_types.VoidMessage, ConferenceForms, path='filterPlayground', http_method='GET', name='filterPlayground')
     def filterPlayground(self, request):
         """Filter Playground"""
 
-        parent_conf = self._getConfByWebSafeKey("ah5kZXZ-Y29uZmVyZW5jZS1jZW50cmFsLWZzbmQtcDRyMQsSB1Byb2ZpbGUiFGhhb3BlaXlhbmdAZ21haWwuY29tDAsSCkNvbmZlcmVuY2UYJAw")
-        q = self._getSessionQuery(request)
+        # parent_conf = self._getEntityByWebSafeKey("ah5kZXZ-Y29uZmVyZW5jZS1jZW50cmFsLWZzbmQtcDRyMQsSB1Byb2ZpbGUiFGhhb3BlaXlhbmdAZ21haWwuY29tDAsSCkNvbmZlcmVuY2UYJAw")
+        # q = self._getSessionQuery(request)
 
-        field = "city"
-        operator = "="
-        value = "Paris"
-        f = ndb.query.FilterNode(field, operator, value)
-        q = q.filter(f)
+        # field = "city"
+        # operator = "="
+        # value = "Paris"
+        # f = ndb.query.FilterNode(field, operator, value)
+        # q = q.filter(f)
 
-        return SessionForms(
-            items=[])
+        # q = Conference.query()
+        # q = q.filter(Conference.city == "San Francisco")
+        # q = q.filter(Conference.topics == "Programming Languages")
+        # q = q.order(Conference.name)
+        # q = q.filter(Conference.month == 6)
+
+        time_7_pm = datetime.strptime('19', '%H').time()
+
+        results = Session.query(Session.startTime > time_7_pm).fetch()
+
+        print results
+        print ''
+
+        new_results = list()
+        for r in results:
+            if r.session_type != "Workshop":
+                new_results.append(r)
+
+        print new_results
+        # print ''
+        # print results
+        # print ''
+
+        # return ConferenceForms(items=[self._copyConferenceToForm(conf, "") for conf in q])
+        return ConferenceForms(items=[])
+
+# - - - Additional Queries - - - - - - - - - - - - - - - - -
+    # 1.  Check to see if sessions in a user's wishlist starts at the same time
+
+    # 2. New Idea needed
+
+    # 3. Non-workshop, before 7PM
+    @endpoints.method(message_types.VoidMessage, SessionForms, path='doubleInequalityFilter', http_method='POST', name='doubleInequalityFilter')
+    def doubleInequalityFilter(self, request):
+        """ Handling queries with multiple inequality filters
+            Queries for non-workshop sessions before 7PM """
+
+        """
+            App engine does not allow multiple inequality filters on different properties.
+            So, one way around this is to first perform an inequality filter for just one property.
+            Then, use a loop to filter the second inequality filter."""
+
+        # firstly, query for non-workshop sessions
+        non_workshop_sessions = Session.query(Session.session_type != 'Workshop').fetch()
+
+        # define time object for inequality comparison; 7PM
+        time_seven_pm = datetime.strptime('19', '%H').time()
+
+        # further filter non_workshop_sessions to only include those before 7PM startTime
+        filtered_session_results = list()
+        for sess in non_workshop_sessions:
+            if sess.startTime < time_seven_pm:
+                filtered_session_results.append(sess)
+
+        return SessionForms(items=[self._copySessionToForm(sess) for sess in filtered_session_results])
+
+
+# Green Exhibition: ah5kZXZ-Y29uZmVyZW5jZS1jZW50cmFsLWZzbmQtcDRyMQsSB1Byb2ZpbGUiFGhhb3BlaXlhbmdAZ21haWwuY29tDAsSCkNvbmZlcmVuY2UYAgw
+# Udacity Intersect: ah5kZXZ-Y29uZmVyZW5jZS1jZW50cmFsLWZzbmQtcDRyMQsSB1Byb2ZpbGUiFGhhb3BlaXlhbmdAZ21haWwuY29tDAsSCkNvbmZlcmVuY2UYAQw
+#   Udacity Difference (Presentation: Mike Wales, Sabastian Thrun)
+#   Android nanodegree: Presentation, Brenda Wilson, Sabastian Thrun, Lecture
+
 
 api = endpoints.api_server([ConferenceApi])  # register API
