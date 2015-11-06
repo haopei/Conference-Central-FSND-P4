@@ -14,7 +14,7 @@ __author__ = 'wesc+api@google.com (Wesley Chun)'
 
 import httplib
 import endpoints
-from protorpc import messages, message_types
+from protorpc import messages
 from google.appengine.ext import ndb
 
 
@@ -105,6 +105,11 @@ class ConferenceForm(messages.Message):
     organizerDisplayName = messages.StringField(12)
 
 
+class GetConferenceForm(messages.Message):
+    """For retrieving a Conference, given a websafe key"""
+    websafeKey = messages.StringField(1, required=True)
+
+
 class ConferenceForms(messages.Message):
     """ConferenceForms -- multiple Conference outbound form message"""
     items = messages.MessageField(ConferenceForm, 1, repeated=True)
@@ -128,7 +133,7 @@ class ConferenceQueryForms(messages.Message):
 class Session(ndb.Model):
     """Session -- sessions within a conference."""
     name = ndb.StringProperty(required=True)
-    highlights = ndb.TextProperty()
+    # highlights = ndb.TextProperty()
     speakers = ndb.StringProperty(repeated=True)
     startTime = ndb.TimeProperty()
     duration = ndb.IntegerProperty()
@@ -138,47 +143,31 @@ class Session(ndb.Model):
 
 
 class SessionForm(messages.Message):
+    """ Session outbound form message """
     name = messages.StringField(1)
-    highlights = messages.StringField(2)
+    # highlights = messages.StringField(2)
     speakers = messages.StringField(3, repeated=True)
     startTime = messages.StringField(4)
     duration = messages.IntegerField(5)
     session_type = messages.StringField(6)
     parent_wsck = messages.StringField(7, required=True)  # required for creating session
-    # organizerUserId = messages.StringField(7)
-    # location = messages.StringField(7)
 
 
 class SessionForms(messages.Message):
-    """Used to contain a list of SessionForm"""
+    """Multiple SessionForm inbound form message"""
     items = messages.MessageField(SessionForm, 1, repeated=True)
     parent_wsck = messages.StringField(2)
 
 
 class SessionByTypeQueryForm(messages.Message):
-    """Used by getConferenceSessionsByType"""
+    """Outbound message - Used by getConferenceSessionsByType."""
     session_type = messages.StringField(1)
     parent_wsck = messages.StringField(2)
 
 
 class SessionBySpeakerQueryForm(messages.Message):
-    """Used by getSessionBySpeaker"""
+    """Outbound message - Used by getSessionBySpeaker"""
     speaker = messages.StringField(1)
-
-
-# can I just create a general query class,
-# and use it for both ConferenceQueryForm and SessionQueryForm?
-class SessionQueryForm(messages.Message):
-    """SessionQueryForm -- for querying Session entities"""
-    field = messages.StringField(1)
-    operator = messages.StringField(2)
-    value = messages.StringField(3)
-    parent_wsck = messages.StringField(4)
-
-
-class SessionQueryForms(messages.Message):
-    """SessionQueryForms -- multiple SessionQueryForm inbound for message"""
-    filters = messages.MessageField(SessionQueryForm, 1, repeated=True)
 
 
 class SessionWishlistItem(ndb.Model):
@@ -188,31 +177,11 @@ class SessionWishlistItem(ndb.Model):
 
 
 class SessionWishlistItemForm(messages.Message):
+    """SessionWishlistItem inbound form message - used for adding to wishlist."""
     session_websafe_key = messages.StringField(1)
 
 
 class SessionWishlistQueryForm(messages.Message):
+    """For querying all sessions in a conference that a user is interested in."""
     user_websafe_key = messages.StringField(1)
     wsck = messages.StringField(2)
-
-# class SessionWishlist(ndb.Model):
-#     """A user's wishlist for sessions"""
-#     wlist = ndb.StringProperty(repeated=True)
-
-
-# class SessionWishlistForm(messages.Message):
-#     session_websafe_key = messages.StringField(1)
-
-
-# class SessionWishlistForms(messages.Message):
-#     items = messages.MessageField(SessionWishlistForm, 1, repeated=True)
-
-
-# class SessionWishlistQueryForm(messages.Message):
-#     """Used by getSessionsInWishlist
-#         to query for all the sessions in a conference that the user is interested in
-#     """
-#     parent_wsck = messages.StringField(1)
-
-
-

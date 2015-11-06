@@ -41,9 +41,13 @@ class SendConfirmationEmailHandler(webapp2.RequestHandler):
 
 class FeaturedSpeakerHandler(webapp2.RequestHandler):
     def post(self):
-        """Updates featured speaker"""
-        conference = self.request.get('conference')
-        ConferenceApi._checkFeaturedSpeaker(conference)
+        """Updates featured speaker after a session is created"""
+
+        # get parent_wsck from taskqueue
+        parent_wsck = self.request.get('parent_wsck')
+
+        # use parent wsck to check featured speaker
+        ConferenceApi._checkFeaturedSpeaker(parent_wsck)
         self.response.set_status(204)
 
 

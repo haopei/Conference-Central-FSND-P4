@@ -30,14 +30,15 @@ from models import TeeShirtSize
 from models import Conference
 from models import ConferenceForm
 from models import ConferenceForms
+from models import GetConferenceForm
 from models import ConferenceQueryForm
 from models import ConferenceQueryForms
 
 from models import Session
 from models import SessionForm
 from models import SessionForms
-from models import SessionQueryForm
-from models import SessionQueryForms
+# from models import SessionQueryForm
+# from models import SessionQueryForms
 from models import SessionByTypeQueryForm
 from models import SessionBySpeakerQueryForm
 
@@ -82,19 +83,20 @@ MEMCACHE_ANNOUNCEMENTS_KEY = "RECENT_ANNOUNCEMENTS"
 ANNOUNCEMENT_TPL = ('Last chance to attend! The following conferences '
                     'are nearly sold out: %s')
 
+
 @endpoints.api(name='conference', version='v1', audiences=[ANDROID_AUDIENCE], allowed_client_ids=[WEB_CLIENT_ID, API_EXPLORER_CLIENT_ID, ANDROID_CLIENT_ID, IOS_CLIENT_ID], scopes=[EMAIL_SCOPE])
 class ConferenceApi(remote.Service):
     """Conference API v0.1"""
 
     def _getCurrentUser(self):
-        """gets the current logged in user's username; to be replaced by _getCurrentUserProfile()"""
+        """Gets the current logged in user's username; to be replaced by _getCurrentUserProfile()"""
         user = endpoints.get_current_user()
         if not user:
             raise endpoints.UnauthorizedException('Authorization required')
         return user
 
     def _getCurrentUserProfile(self):
-        """gets the current logged in user's Profile entity"""
+        """Gets the currently logged-in user's Profile entity"""
         username = endpoints.get_current_user()
         if not username:
             raise endpoints.UnauthorizedException('User is not logged in.')
@@ -110,12 +112,12 @@ class ConferenceApi(remote.Service):
         return user_profile
 
     def _getEntityByWebSafeKey(self, websafe_key):
-        """Given a websafe key, return parent Conference entity entity"""
-        parent_entity = ndb.Key(urlsafe=websafe_key).get()
-        if not parent_entity:
+        """Given a urlsafe key, return its matching entity"""
+        entity = ndb.Key(urlsafe=websafe_key).get()
+        if not entity:
             raise endpoints.NotFoundException(
-                'No parent entity found by this websafe key: %s' % websafe_key)
-        return parent_entity
+                'No entity found by this websafe key: %s' % websafe_key)
+        return entity
 
 # - - - Conferences - - - - - - - - - - - - - - - - -
 
@@ -557,53 +559,31 @@ class ConferenceApi(remote.Service):
         sf.check_initialized()
         return sf
 
-    @staticmethod
-    def _checkFeaturedSpeaker(wsck):
-        """Check to see if a speaker is in more than one sessions in a conference"""
-
-        # get the session's parent conference
-        conference = ndb.Key(urlsafe=wsck).get()
-
-        # find sessions in this conference
-        sessions = Session.query(ancestor=conference.key).fetch()
-
-        # retrieve all speakers from all sessions in this Conference
-        all_sessions_speakers = list()
-        for sess in sessions:
-            all_sessions_speakers.extend(sess.speakers)
-
-        # add featured speaker to memecache
-        if all_sessions_speakers:
-            # get the most frequently occuring speaker's name from the list of all speakers
-            featured_speaker = max(set(all_sessions_speakers), key=all_sessions_speakers.count)
-            data = "Today's featured speaker is %s" % str(featured_speaker)
-
-            # update memcache entry for featured_speaker
-            memcache.delete('featured_speaker')
-            memcache.add("featured_speaker", data)
-        return
-
     def _createSessionObject(self, request):
 
         # get current user
         # returns a Profile object
-        user = self._getCurrentUser()
+        user = self._getCurrentUserProfile()
 
         # get parent Conference entity using wsck from request
         parent_conf = self._getEntityByWebSafeKey(request.parent_wsck)
+
+        # raise exception if current user is not author of this session's conference
+        if not parent_conf.key.parent().get() == user:
+            raise endpoints.UnauthorizedException("You must be the conference's author to create its sessions.")
 
         # Allocate id for new Session entity
         session_id = Session.allocate_ids(size=1, parent=parent_conf.key)[0]
         session_key = ndb.Key(Session, session_id, parent=parent_conf.key)
 
-        # add values to data from request object (SessionForm)
+        # Copy values to data from request object
         data = {field.name: getattr(request, field.name) for field in request.all_fields()}
 
         # convert startTime into datetime.time object
         #   since Session Kind expects a ndb.TimeProperty
         data['startTime'] = datetime.strptime(data['startTime'], '%H').time()
 
-        # assign the key of the to-be-created Session entity to be the session_key,
+        # assign the key of the to-be-created Session entity to be 'session_key',
         #   which has the parent_conf embedded as the parent.
         data['key'] = session_key
 
@@ -611,58 +591,64 @@ class ConferenceApi(remote.Service):
         Session(**data).put()
 
         # create a task to update the featured speaker, if required.
-        taskqueue.add(url="/tasks/check_featured_speaker", params={'conference': request.parent_wsck})
+        taskqueue.add(url="/tasks/check_featured_speaker", params={'parent_wsck': request.parent_wsck})
 
         return request
 
-    # TASK 1: COMPLETE
+    # TASK 1a: COMPLETE
     @endpoints.method(SessionForm, SessionForm, path='createSession', http_method='POST', name='createSession')
     def createSession(self, request):
         """Create a Session entity given a parent wsck"""
-        # TODO: only the creator of the conference can create its child sessions
         return self._createSessionObject(request)
 
-    # TASK 2: COMPLETE
-    @endpoints.method(SessionForm, SessionForms, path='getConferenceSessions', http_method='POST', name='getConferenceSessions')
+    # TASK 1b: COMPLETE
+    @endpoints.method(GetConferenceForm, SessionForms, path='getConferenceSessions', http_method='POST', name='getConferenceSessions')
     def getConferenceSessions(self, request):
         """Given a conference, return its sessions"""
 
-        # get the parent conference entity using the request.wsck
-        parent_conf = self._getEntityByWebSafeKey(request.parent_wsck)
+        # get the parent conference entity using the request.websafeKey
+        parent_conf = self._getEntityByWebSafeKey(request.websafeKey)
 
         # query sessions using the parent_conf as ancestor
         sessions = Session.query(ancestor=parent_conf.key).fetch()
 
         return SessionForms(items=[self._copySessionToForm(session) for session in sessions])
 
-    # TASK 3: COMPLETE
+    # TASK 1c: COMPLETE
     @endpoints.method(SessionByTypeQueryForm, SessionForms, path='getConferenceSessionsByType', http_method='POST', name='getConferenceSessionsByType')
     def getConferenceSessionsByType(self, request):
         """Given a conference, return all sessions of a specified type (eg lecture, keynote, workshop)"""
 
+        # retrieve parent Conference entity
         parent_conf = self._getEntityByWebSafeKey(request.parent_wsck)
-        sessions = Session.query(ancestor=parent_conf.key).filter(Session.session_type == request.session_type)
+
+        # query for sessions of a given session_type
+        sessions = Session.query(ancestor=parent_conf.key).filter(Session.session_type == request.session_type).fetch()
 
         return SessionForms(items=[self._copySessionToForm(session) for session in sessions])
 
-    # TASK 4: COMPLETE
+    # TASK 1d: COMPLETE
     @endpoints.method(SessionBySpeakerQueryForm, SessionForms, path='getSessionsBySpeaker', http_method='POST', name='getSessionsBySpeaker')
     def getSessionsBySpeaker(self, request):
         """Returns all sessions given a particular speaker"""
+
+        # query for sessions which contain the given speaker.
         sessions = Session.query().filter(Session.speakers.IN([request.speaker]))
 
         return SessionForms(items=[self._copySessionToForm(session) for session in sessions])
 
 # - - - Wishlist - - - - - - - - - - - - - - - - - - -
 
+    # Task 2a
     @endpoints.method(SessionWishlistItemForm, SessionWishlistItemForm, path='addSessionToWishlist', http_method='POST', name='addSessionToWishlist')
     def addSessionToWishlist(self, request):
-        """Add session to user's wishlist, given a session"""
+        """adds the session to the user's list of sessions they are interested in attending"""
 
-        # get current user
+        # get current user's Profile
         user = self._getCurrentUserProfile()
 
-        # retrieve Session entity from request to be added to wishlist
+        # retrieve Session entity from request
+        #   to be added to the user's wishlist
         session_websafe_key = request.session_websafe_key
         session_to_add = self._getEntityByWebSafeKey(session_websafe_key)
 
@@ -671,33 +657,33 @@ class ConferenceApi(remote.Service):
         if session_in_wishlist:
             raise ConflictException('Session already found in wishlist.')
 
-        # define SessionWishlistItem id allocation and key
+        # create new key for SessionWishlistItem entity
         #   with user.key as parent
         session_wishlist_id = SessionWishlistItem.allocate_ids(size=1, parent=user.key)[0]
         session_wishlist_key = ndb.Key(SessionWishlistItem, session_wishlist_id, parent=user.key)
 
-        # prepare data to be used for creating new wishlist item
+        # prepare data to be used for creating new SessionWishlistItem entity
         data = dict()
-        data['key'] = session_wishlist_key  # overwrite automatically generated key with our custom parental key
+        data['key'] = session_wishlist_key  # overwrite the automatically-generated key with our custom parental key
         data['session_websafe_key'] = session_websafe_key
         data['parent_wsck'] = session_to_add.parent_wsck
+
+        # create new SessionWishlistItem entity
         SessionWishlistItem(**data).put()
 
         return request
 
-    # COMPLETE
+    # Task 2b
     @endpoints.method(SessionWishlistQueryForm, SessionForms, path='getSessionsInWishlist', http_method='POST', name='getSessionsInWishlist')
     def getSessionsInWishlist(self, request):
-        """Query for all the sessions in a conference that the user is interested in
-            Given any user and conference, find all SessionWishlistItem in that session
-        """
+        """Given user and conference, find all user's SessionWishlistItem in that session"""
 
-        # get user and conference from request
+        # get user and conference entities from request
         user = self._getEntityByWebSafeKey(request.user_websafe_key)
         conference = self._getEntityByWebSafeKey(request.wsck)
 
         # query for SessionWishlistItem entities
-        #   given user as ancestor
+        #   using user as ancestor
         #   and wsck as parent conference
         wishlist = SessionWishlistItem.query(
             ancestor=user.key).filter(
@@ -710,14 +696,45 @@ class ConferenceApi(remote.Service):
 
 # - - - Get Featured Speaker - - - - - - - - - - - - - - -
 
+    @staticmethod
+    def _checkFeaturedSpeaker(wsck):
+        """Check to see if a speaker is in more than one sessions in a conference"""
+
+        # get the session's parent conference
+        parent_conf = ndb.Key(urlsafe=wsck).get()
+
+        # get all sessions in this conference
+        sessions = Session.query(ancestor=parent_conf.key).fetch()
+
+        # retrieve all speakers from all sessions in this Conference
+        all_speakers = list()
+        for sess in sessions:
+            all_speakers.extend(sess.speakers)
+
+        # add featured speaker to memcache
+        if all_speakers:
+            # get the most frequently occuring speaker's name from the list of all speakers
+            featured_speaker = max(set(all_speakers), key=all_speakers.count)
+
+            # update memcache entry for featured_speaker
+            memcache.delete('featured_speaker')
+            memcache.add("featured_speaker", featured_speaker)
+        return
+
     @endpoints.method(message_types.VoidMessage, StringMessage, path='getFeaturedSpeaker', http_method='POST', name='getFeaturedSpeaker')
     def getFeaturedSpeaker(self, request):
         """Retrieve the featured speaker from memcache"""
-        featured_speaker = memcache.get('featured_speaker')
-        if not featured_speaker:
-            featured_speaker = "No featured speaker right now."
 
-        return StringMessage(data=featured_speaker)
+        # get featured speaker from memcache
+        featured_speaker = memcache.get('featured_speaker')
+
+        # handle no featured speaker
+        if not featured_speaker:
+            message = "No featured speaker right now."
+        else:
+            message = "Today's featured speaker is %s" % str(featured_speaker)
+
+        return StringMessage(data=message)
 
 # - - - Playground - - - - - - - - - - - - - - - - - - -
     @endpoints.method(message_types.VoidMessage, ConferenceForms, path='filterPlayground', http_method='GET', name='filterPlayground')
@@ -765,70 +782,73 @@ class ConferenceApi(remote.Service):
         """Returns the most frequently occuring item in a list"""
         return max(set(lst), key=lst.count)
 
-    # 1. Most wishlisted for session
-    @endpoints.method(message_types.VoidMessage, SessionForm, path='mostWishlistedSessions', http_method='POST', name='mostWishlistedSessions')
-    def mostWishlistedSessions(self, request):
+    # Additional Queries 1: Get most wishlisted session
+    @endpoints.method(message_types.VoidMessage, SessionForm, path='getMostWishlistedSessions', http_method='POST', name='getMostWishlistedSessions')
+    def getMostWishlistedSessions(self, request):
         """Returns the most wishlisted session"""
+
+        # get all wishlist entities
         wishlisted_sessions = SessionWishlistItem.query().fetch()
 
-        # extract session keys
-        #   to be used for the _mostCommonItem(session_keys) which uses set()
-        #   and 'Model' is not immutable
+        # extract Session keys from all SessionWishlistItem entities
+        #   to be used for in _mostCommonItem(session_keys)
+        #   which uses set() and 'Model' is not immutable
         session_keys = [sess.session_websafe_key for sess in wishlisted_sessions]
 
-        # get most common item in list (the most frequently wishlisted session)
+        # get most common item in session_keys list;
+        #   AKA, the most wishlisted session.
         most_wishlisted_session = ndb.Key(urlsafe=self._mostCommonItem(session_keys)).get()
 
         return self._copySessionToForm(most_wishlisted_session)
 
-    # 2. Most registered session
-    @endpoints.method(message_types.VoidMessage, StringMessage, path='BusiestSpeaker', http_method='POST', name='BusiestSpeaker')
-    def BusiestSpeaker(self, request):
-        """Return the businest speaker who speaks at the most sessions across all conferences"""
+    # Additional Queries 2: Get busiest speaker
+    @endpoints.method(message_types.VoidMessage, StringMessage, path='getBusiestSpeaker', http_method='POST', name='getBusiestSpeaker')
+    def getBusiestSpeaker(self, request):
+        """Return the busiest speaker; one who speaks at the most sessions across all conferences"""
 
         # get all sessions
         all_sessions = Session.query().fetch()
 
-        # extract a list of lists of speakers from all sessions
+        # put all lists of speakers per session, on a single list
+        # since each session has a list of speakers
+        # Format example: [['Paul Irish'], ['Mike', 'Cameron'], ['Ben', 'Mike'], ... ]
         list_of_lists_of_speakers = [sess.speakers for sess in all_sessions]
 
-        # merge all speakers in one flat list
+        # Flatten all speakers on a single list
+        # Format example: ['Paul Irish', 'Mike', 'Cameron', 'Ben', 'Mike', ... ]
         all_speakers = list()
         for speakers in list_of_lists_of_speakers:
             all_speakers.extend(speakers)
 
         # get busiest speaker
+        #   by identifying the most frequently occuring speaker on the list
         busiest_speaker = self._mostCommonItem(all_speakers)
 
-        response = "The businest speaker across all sessions is %s." % busiest_speaker
+        response = "The busiest speaker across all sessions is %s." % busiest_speaker
 
         return StringMessage(data=response)
 
-    # 3. Non-workshop, before 7PM
-
-    def _getMatchingItemsInList(self, list1, list2):
-        """Returns common items in two lists."""
-        return [i for i in list1 if i in list2]
-
     @endpoints.method(message_types.VoidMessage, SessionForms, path='doubleInequalityFilter', http_method='POST', name='doubleInequalityFilter')
     def doubleInequalityFilter(self, request):
-        """ Handling queries with multiple inequality filters
-            Queries for non-workshop sessions before 7PM """
+        """ Queries for non-workshop sessions before 7PM.
+            Handling queries with multiple inequality filters."""
 
-        """
-            App engine does not allow multiple inequality filters on different properties.
-            So, one way around this is to first perform an inequality filter for just one property.
-            Then, use a loop to filter the second inequality filter."""
-
-        # firstly, query for non-workshop sessions
+        # define time object for 7PM
         time_seven_pm = datetime.strptime('19', '%H').time()
-        non_workshop_sessions = Session.query(Session.session_type != 'Workshop').fetch()
-        before_seven_pm_sessions = Session.query(Session.startTime < time_seven_pm).fetch()
 
-        # return matching entities in both list of sessions
-        filtered_sessions = self._getMatchingItemsInList(non_workshop_sessions, before_seven_pm_sessions)
+        # First inequality query
+        #   Get sessions which are NOT 'Workshop'
+        non_workshop_keys = Session.query(Session.session_type != 'Workshop').fetch(keys_only=True)
 
-        return SessionForms(items=[self._copySessionToForm(sess) for sess in filtered_sessions])
+        # Second inequality query
+        #   Get sessions which start before 7PM
+        before_seven_pm_keys = Session.query(Session.startTime < time_seven_pm).fetch(keys_only=True)
+
+        # find sets of matching keys between the two queries
+        #   and retrieve their entities.
+        matching_sessions = ndb.get_multi(set(non_workshop_keys).intersection(before_seven_pm_keys))
+
+        return SessionForms(items=[self._copySessionToForm(sess) for sess in matching_sessions])
 
 # register API
 api = endpoints.api_server([ConferenceApi])

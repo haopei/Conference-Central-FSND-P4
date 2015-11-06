@@ -14,3 +14,14 @@ indexes:
   properties:
   - name: city
   - name: name
+
+- kind: Conference
+  properties:
+  - name: city
+  - name: topics
+  - name: name
+
+- kind: Conference
+  properties:
+  - name: topics
+  - name: name
