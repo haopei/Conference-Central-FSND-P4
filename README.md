@@ -44,13 +44,17 @@ FSND P4: Conference Central
 ### Task 3: Handling multiple inequality queries of different properties
 
   ##### The Problem
+
   NDB currently restricts multiple inequality queries of different properties.
 
   ##### My Solution
+
   My solution in this project is implemented as the `doubleInequalityFilter()` endpoint method which makes two separate inequality queries (one which finds Session entities which are not 'Workshop', and another which finds Session entities which start before 7PM). Both queries use `keys_only=True` to return a smaller sized result. Subsequently, the common entities between these two queries are then retrieved using `ndb.get_multi(set(first_list_of_keys))intersection(second_list_of_keys))`. The result is a list of sessions which are both 'non workshops' and occur before 7pm.
 
   ##### Alternative Solution
+
   An alternative solution is to make just one of the two inequality queries (preferably the query which is expected to return fewer items), and then loop through the result set to further filter using the other inequality operator. For example, you may first query for all Sessions which start before 7PM. Then, loop through these sessions to only extract those which are not 'Workshop'.
 
   ##### Handling Larger Results
+
   For larger data sets, `Session(ndb.Model)` may be remodelled to include a `startPeriod` property, which indicates that a session may start either in the `morning` (6AM-12PM), `afternoon` (1PM-6PM), or `evening` (6PM-11AM). This value may be computed using the `ndb.ComputedProperty()`. For example, an event which occurs at 7PM will be computed to have a `startPeriod` value of 'evening'. Then, we may query for a significantly smaller result set: `Session.query(Session.startPeriod == 'evening').filter(Session.session_type != 'Workshop').fetch()`. Finally, we may loop through our smaller result set, and filter for those sessions where `session.startTime < 7PM`.
