@@ -132,7 +132,7 @@ class Session(ndb.Model):
     speakers = ndb.StringProperty(repeated=True)
     startTime = ndb.TimeProperty()
     duration = ndb.IntegerProperty()
-    session_type = ndb.StringProperty(repeated=True)
+    session_type = ndb.StringProperty()
     parent_wsck = ndb.StringProperty()
     # location = ndb.StringProperty()
 
@@ -142,8 +142,8 @@ class SessionForm(messages.Message):
     highlights = messages.StringField(2)
     speakers = messages.StringField(3, repeated=True)
     startTime = messages.StringField(4)
-    duration = messages.StringField(5)
-    session_type = messages.StringField(6, repeated=True)
+    duration = messages.IntegerField(5)
+    session_type = messages.StringField(6)
     parent_wsck = messages.StringField(7, required=True)  # required for creating session
     # organizerUserId = messages.StringField(7)
     # location = messages.StringField(7)

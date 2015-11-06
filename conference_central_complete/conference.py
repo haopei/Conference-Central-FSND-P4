@@ -52,6 +52,7 @@ from settings import WEB_CLIENT_ID, ANDROID_CLIENT_ID, IOS_CLIENT_ID, ANDROID_AU
 
 from utils import getUserId
 from datetime import datetime
+from collections import Counter
 
 EMAIL_SCOPE = endpoints.EMAIL_SCOPE
 API_EXPLORER_CLIENT_ID = endpoints.API_EXPLORER_CLIENT_ID
@@ -759,11 +760,56 @@ class ConferenceApi(remote.Service):
         return ConferenceForms(items=[])
 
 # - - - Additional Queries - - - - - - - - - - - - - - - - -
-    # 1.  Check to see if sessions in a user's wishlist starts at the same time
 
-    # 2. New Idea needed
+    def _mostCommonItem(self, lst):
+        """Returns the most frequently occuring item in a list"""
+        return max(set(lst), key=lst.count)
+
+    # 1. Most wishlisted for session
+    @endpoints.method(message_types.VoidMessage, SessionForm, path='mostWishlistedSessions', http_method='POST', name='mostWishlistedSessions')
+    def mostWishlistedSessions(self, request):
+        """Returns the most wishlisted session"""
+        wishlisted_sessions = SessionWishlistItem.query().fetch()
+
+        # extract session keys
+        #   to be used for the _mostCommonItem(session_keys) which uses set()
+        #   and 'Model' is not immutable
+        session_keys = [sess.session_websafe_key for sess in wishlisted_sessions]
+
+        # get most common item in list (the most frequently wishlisted session)
+        most_wishlisted_session = ndb.Key(urlsafe=self._mostCommonItem(session_keys)).get()
+
+        return self._copySessionToForm(most_wishlisted_session)
+
+    # 2. Most registered session
+    @endpoints.method(message_types.VoidMessage, StringMessage, path='BusiestSpeaker', http_method='POST', name='BusiestSpeaker')
+    def BusiestSpeaker(self, request):
+        """Return the businest speaker who speaks at the most sessions across all conferences"""
+
+        # get all sessions
+        all_sessions = Session.query().fetch()
+
+        # extract a list of lists of speakers from all sessions
+        list_of_lists_of_speakers = [sess.speakers for sess in all_sessions]
+
+        # merge all speakers in one flat list
+        all_speakers = list()
+        for speakers in list_of_lists_of_speakers:
+            all_speakers.extend(speakers)
+
+        # get busiest speaker
+        busiest_speaker = self._mostCommonItem(all_speakers)
+
+        response = "The businest speaker across all sessions is %s." % busiest_speaker
+
+        return StringMessage(data=response)
 
     # 3. Non-workshop, before 7PM
+
+    def _getMatchingItemsInList(self, list1, list2):
+        """Returns common items in two lists."""
+        return [i for i in list1 if i in list2]
+
     @endpoints.method(message_types.VoidMessage, SessionForms, path='doubleInequalityFilter', http_method='POST', name='doubleInequalityFilter')
     def doubleInequalityFilter(self, request):
         """ Handling queries with multiple inequality filters
@@ -775,24 +821,14 @@ class ConferenceApi(remote.Service):
             Then, use a loop to filter the second inequality filter."""
 
         # firstly, query for non-workshop sessions
-        non_workshop_sessions = Session.query(Session.session_type != 'Workshop').fetch()
-
-        # define time object for inequality comparison; 7PM
         time_seven_pm = datetime.strptime('19', '%H').time()
+        non_workshop_sessions = Session.query(Session.session_type != 'Workshop').fetch()
+        before_seven_pm_sessions = Session.query(Session.startTime < time_seven_pm).fetch()
 
-        # further filter non_workshop_sessions to only include those before 7PM startTime
-        filtered_session_results = list()
-        for sess in non_workshop_sessions:
-            if sess.startTime < time_seven_pm:
-                filtered_session_results.append(sess)
+        # return matching entities in both list of sessions
+        filtered_sessions = self._getMatchingItemsInList(non_workshop_sessions, before_seven_pm_sessions)
 
-        return SessionForms(items=[self._copySessionToForm(sess) for sess in filtered_session_results])
+        return SessionForms(items=[self._copySessionToForm(sess) for sess in filtered_sessions])
 
-
-# Green Exhibition: ah5kZXZ-Y29uZmVyZW5jZS1jZW50cmFsLWZzbmQtcDRyMQsSB1Byb2ZpbGUiFGhhb3BlaXlhbmdAZ21haWwuY29tDAsSCkNvbmZlcmVuY2UYAgw
-# Udacity Intersect: ah5kZXZ-Y29uZmVyZW5jZS1jZW50cmFsLWZzbmQtcDRyMQsSB1Byb2ZpbGUiFGhhb3BlaXlhbmdAZ21haWwuY29tDAsSCkNvbmZlcmVuY2UYAQw
-#   Udacity Difference (Presentation: Mike Wales, Sabastian Thrun)
-#   Android nanodegree: Presentation, Brenda Wilson, Sabastian Thrun, Lecture
-
-
-api = endpoints.api_server([ConferenceApi])  # register API
+# register API
+api = endpoints.api_server([ConferenceApi])
