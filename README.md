@@ -31,7 +31,7 @@ FSND P4: Conference Central
    - Both `SessionByTypeQueryForm()` and `SessionBySpeakerQueryForm()` were created to simplify querying, since they require the minimal parameters to return the desired response.
 
 ### Creating a Session
-   - The `startTime` property takes an `hour:minute` format (example: *13:45*), while the `date` property takes a `YYYY-MM-DD` format (example: *2015-12-10*). The parent_wsck identifies the parent conference entity under which this session entity should be created.
+   - The `startTime` property takes an `hour:minute` format (example: *13:45*), while the `date` property takes a `YYYY-MM-DD` format (example: *2015-12-10*). All other fields should be self-explanatory.
 
 
 ### Session Wishlist Implementation
