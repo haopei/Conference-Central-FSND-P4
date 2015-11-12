@@ -45,9 +45,10 @@ class FeaturedSpeakerHandler(webapp2.RequestHandler):
 
         # get parent_wsck from taskqueue
         parent_wsck = self.request.get('parent_wsck')
+        speaker = self.request.get('speaker')
 
         # use parent wsck to check featured speaker
-        ConferenceApi._checkFeaturedSpeaker(parent_wsck)
+        ConferenceApi._checkFeaturedSpeaker(parent_wsck, speaker)
         self.response.set_status(204)
 
 

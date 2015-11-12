@@ -58,3 +58,15 @@ FSND P4: Conference Central
 #### Handling Larger Results
 
   For larger data sets, `Session(ndb.Model)` may be remodelled to include a `startPeriod` property, which indicates that a session may start either in the `morning` (6AM-12PM), `afternoon` (1PM-6PM), or `evening` (6PM-11AM). This value may be computed using the `ndb.ComputedProperty()`. For example, an event which occurs at 7PM will be computed to have a `startPeriod` value of `evening`. Then, we may query for a significantly smaller result set: `Session.query(Session.startPeriod == 'evening').filter(Session.session_type != 'Workshop').fetch()`. Finally, we may loop through our smaller result set, and filter for those sessions where `session.startTime < 7PM`.
+
+
+
+#### Fixes:
+
+_copySessionToForm
+This method will need additional work to handle the required fields to be added. As well, I strongly recommend including the logic necessary to set a websafeSessionKey field. (Check out how the original Udacity code does it for ConferenceForm).
+
+data['startTime'] = datetime.strptime data['startTime'], '%H').time()
+Also, what if a Session starts at 12:45pm?
+640
+

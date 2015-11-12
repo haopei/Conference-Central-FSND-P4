@@ -133,30 +133,32 @@ class ConferenceQueryForms(messages.Message):
 class Session(ndb.Model):
     """Session -- sessions within a conference."""
     name = ndb.StringProperty(required=True)
-    # highlights = ndb.TextProperty()
-    speakers = ndb.StringProperty(repeated=True)
-    startTime = ndb.TimeProperty()
+    highlights = ndb.TextProperty()
+    speakers = ndb.StringProperty(required=True)
+    date = ndb.DateProperty()
+    startTime = ndb.TimeProperty(required=True)
     duration = ndb.IntegerProperty()
-    session_type = ndb.StringProperty()
-    parent_wsck = ndb.StringProperty()
-    # location = ndb.StringProperty()
+    session_type = ndb.StringProperty(required=True)
+    location = ndb.StringProperty()
 
 
 class SessionForm(messages.Message):
     """ Session outbound form message """
-    name = messages.StringField(1)
-    # highlights = messages.StringField(2)
-    speakers = messages.StringField(3, repeated=True)
-    startTime = messages.StringField(4)
-    duration = messages.IntegerField(5)
-    session_type = messages.StringField(6)
-    parent_wsck = messages.StringField(7, required=True)  # required for creating session
+    name = messages.StringField(1, required=True)
+    highlights = messages.StringField(2)
+    speakers = messages.StringField(3, required=True)
+    date = messages.StringField(4)
+    startTime = messages.StringField(5)
+    duration = messages.IntegerField(6)
+    session_type = messages.StringField(7, required=True)
+    parent_wsck = messages.StringField(8)  # required for creating session
+    location = messages.StringField(9)
+    websafe_key = messages.StringField(10)
 
 
 class SessionForms(messages.Message):
     """Multiple SessionForm inbound form message"""
     items = messages.MessageField(SessionForm, 1, repeated=True)
-    parent_wsck = messages.StringField(2)
 
 
 class SessionByTypeQueryForm(messages.Message):
@@ -172,8 +174,10 @@ class SessionBySpeakerQueryForm(messages.Message):
 
 class SessionWishlistItem(ndb.Model):
     """This represents a wishlist item. Ancestor: Profile entity"""
-    parent_wsck = ndb.StringProperty()
     session_websafe_key = ndb.StringProperty()
+    # the parent conference entity of the session;
+    #    used for comparison in getSessionsInWishlist
+    parent_wsck = ndb.StringProperty()
 
 
 class SessionWishlistItemForm(messages.Message):
@@ -183,5 +187,4 @@ class SessionWishlistItemForm(messages.Message):
 
 class SessionWishlistQueryForm(messages.Message):
     """For querying all sessions in a conference that a user is interested in."""
-    user_websafe_key = messages.StringField(1)
-    wsck = messages.StringField(2)
+    wsck = messages.StringField(1)
