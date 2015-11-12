@@ -134,7 +134,7 @@ class Session(ndb.Model):
     """Session -- sessions within a conference."""
     name = ndb.StringProperty(required=True)
     highlights = ndb.TextProperty()
-    speakers = ndb.StringProperty(required=True)
+    speaker = ndb.StringProperty(required=True)
     date = ndb.DateProperty()
     startTime = ndb.TimeProperty(required=True)
     duration = ndb.IntegerProperty()
@@ -146,14 +146,13 @@ class SessionForm(messages.Message):
     """ Session outbound form message """
     name = messages.StringField(1, required=True)
     highlights = messages.StringField(2)
-    speakers = messages.StringField(3, required=True)
+    speaker = messages.StringField(3, required=True)
     date = messages.StringField(4)
-    startTime = messages.StringField(5)
+    startTime = messages.StringField(5, required=True)
     duration = messages.IntegerField(6)
     session_type = messages.StringField(7, required=True)
-    parent_wsck = messages.StringField(8)  # required for creating session
-    location = messages.StringField(9)
-    websafe_key = messages.StringField(10)
+    location = messages.StringField(8)
+    websafe_key = messages.StringField(9)
 
 
 class SessionForms(messages.Message):
@@ -164,11 +163,10 @@ class SessionForms(messages.Message):
 class SessionByTypeQueryForm(messages.Message):
     """Outbound message - Used by getConferenceSessionsByType."""
     session_type = messages.StringField(1)
-    parent_wsck = messages.StringField(2)
 
 
 class SessionBySpeakerQueryForm(messages.Message):
-    """Outbound message - Used by getSessionBySpeaker"""
+    """Outbound message - Used by getSessionsBySpeaker"""
     speaker = messages.StringField(1)
 
 

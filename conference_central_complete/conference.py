@@ -630,6 +630,8 @@ class ConferenceApi(remote.Service):
         # returns a Profile object
         user = self._getCurrentUserProfile()
 
+        print request
+
         # get parent Conference entity using wsck from request
         parent_conf = self._getEntityByWebSafeKey(request.parent_wsck)
 
@@ -656,9 +658,7 @@ class ConferenceApi(remote.Service):
             data['startTime'] = datetime.strptime(data['startTime'], '%H:%M').time()
 
         if data['date']:
-            print data['date']
             data['date'] = datetime.strptime(data['date'][:10], "%Y-%m-%d").date()
-            print data['date']
 
         # assign the key of the to-be-created Session entity to be 'session_key',
         #   which has the parent_conf embedded as the parent.
@@ -670,13 +670,14 @@ class ConferenceApi(remote.Service):
         # create a task to update the featured speaker, if required.
         taskqueue.add(
             url="/tasks/check_featured_speaker",
-            params={'parent_wsck': request.parent_wsck, 'speakers': saved_session.speakers})
+            params={'parent_wsck': request.parent_wsck, 'speaker': saved_session.speaker})
 
         return self._copySessionToForm(session_key.get())
 
     @endpoints.method(
-        SessionForm, SessionForm,
-        path='createSession', http_method='POST', name='createSession')
+        endpoints.ResourceContainer(SessionForm, parent_wsck=messages.StringField(1)),
+        SessionForm,
+        path='createSession/{parent_wsck}', http_method='POST', name='createSession/')
     def createSession(self, request):
         """Create a Session entity given a parent wsck"""
 
@@ -700,7 +701,8 @@ class ConferenceApi(remote.Service):
 
     # TASK 1c: COMPLETE
     @endpoints.method(
-        SessionByTypeQueryForm, SessionForms,
+        endpoints.ResourceContainer(SessionByTypeQueryForm, parent_wsck=messages.StringField(1)),
+        SessionForms,
         path='getConferenceSessionsByType',
         http_method='POST', name='getConferenceSessionsByType')
     def getConferenceSessionsByType(self, request):
@@ -725,7 +727,7 @@ class ConferenceApi(remote.Service):
 
         # query for sessions which contain the given speaker.
         sessions = Session.query().filter(
-            Session.speakers.IN([request.speaker]))
+            Session.speaker == request.speaker)
 
         return SessionForms(items=[self._copySessionToForm(session)
                             for session in sessions])
@@ -767,7 +769,10 @@ class ConferenceApi(remote.Service):
         #   with our custom parental key
         data['key'] = session_wishlist_key
         data['session_websafe_key'] = session_websafe_key
-        data['parent_wsck'] = session_to_add.parent_wsck
+
+        # the denormalized parent conference websafe key of this session
+        #   used for easy query filtering in getSessionWishlistItem endpoint
+        data['parent_wsck'] = session_to_add.key.parent().get().key.urlsafe()
 
         SessionWishlistItem(**data).put()
 
@@ -808,29 +813,16 @@ class ConferenceApi(remote.Service):
         # get the session's parent conference
         parent_conf = ndb.Key(urlsafe=wsck).get()
 
-        # get all sessions in this conference
-        sessions = Session.query(ancestor=parent_conf.key).fetch()
+        # count of all sessions in this conference by the speaker
+        sessions_count = Session.query(
+            ancestor=parent_conf.key).filter(
+            Session.speaker == speaker).count()
 
-        # retrieve all speakers from all sessions in this Conference
-        all_speakers = list()
-        for sess in sessions:
-            all_speakers.extend(sess.speakers)
+        # update memcache if session count by speaker is greater than 1
+        if sessions_count > 1:
+            memcache.delete('featured_speaker')
+            memcache.add('featured_speaker', speaker)
 
-        # add featured speaker to memcache
-        if all_speakers:
-            # get the most frequently occuring speaker's name
-            #   from the list of all speakers
-            most_frequent_speaker = max(set(all_speakers), key=all_speakers.count)
-
-            # get the count per speaker
-            count_per_speaker = Counter(all_speakers)
-
-            # is most_frequent_speaker is > 1, then update memcache
-            if count_per_speaker[most_frequent_speaker] > 1:
-                # update memcache entry for featured_speaker
-                featured_speaker = most_frequent_speaker
-                memcache.delete('featured_speaker')
-                memcache.add("featured_speaker", featured_speaker)
         return
 
     @endpoints.method(
@@ -884,19 +876,9 @@ class ConferenceApi(remote.Service):
             one who speaks at the most sessions across all conferences
         """
 
-        # get all sessions
-        all_sessions = Session.query().fetch()
-
-        # put all lists of speakers per session, on a single list
-        # since each session has a list of speakers
-        # Format example: [['Paul Irish'], ['Mike', 'Cameron'], ['Ben', 'Mike'], ... ]
-        list_of_lists_of_speakers = [sess.speakers for sess in all_sessions]
-
-        # Flatten all speakers on a single list
-        # Format example: ['Paul Irish', 'Mike', 'Cameron', 'Ben', 'Mike', ... ]
-        all_speakers = list()
-        for speakers in list_of_lists_of_speakers:
-            all_speakers.extend(speakers)
+        # get all speakers across all sessions
+        all_sessions = Session.query()
+        all_speakers = [sess.speaker for sess in all_sessions]
 
         # get busiest speaker
         #   by identifying the most frequently occuring speaker on the list
@@ -942,8 +924,22 @@ class ConferenceApi(remote.Service):
     def filterPlayground(self, request):
         """Filter Playground"""
 
-        curr = self._getCurrentUserProfile()
-        print curr
+        parent_conf = ndb.Key(urlsafe='ah5kZXZ-Y29uZmVyZW5jZS1jZW50cmFsLWZzbmQtcDRyMQsSB1Byb2ZpbGUiFGhhb3BlaXlhbmdAZ21haWwuY29tDAsSCkNvbmZlcmVuY2UYAQw').get()
+
+        speaker = 'Kevin'
+
+        # all sessions in this conference
+        sessions_count = Session.query(
+            ancestor=parent_conf.key).filter(
+            Session.speaker == 'Maha').count(limit=2)
+
+        print sessions_count
+
+        if sessions_count > 1:
+            memcache.delete('featured_speaker')
+            memcache.add('featured_speaker', 'YANGGGGGGG')
+
+
         return ConferenceForms(items=[])
 
 
